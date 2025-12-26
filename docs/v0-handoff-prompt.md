@@ -25,9 +25,23 @@ YouTube 영상 자동 시청 시스템의 관리 대시보드입니다. Android 
   "charts": "Recharts",
   "icons": "Lucide React",
   "routing": "React Router v6",
-  "date": "date-fns + date-fns/locale/ko"
+  "date": "date-fns + date-fns/locale/ko",
+  "backend": "Supabase (PostgreSQL + Realtime + Auth + Storage)",
+  "automation": "n8n (워크플로우 자동화)"
 }
 ```
+
+### Supabase 연동
+- **실시간 구독**: 기기 상태, 작업 현황 실시간 업데이트
+- **자동 REST API**: PostgREST 기반 API 자동 생성
+- **스토리지**: 스크린샷 저장
+- **Row Level Security**: 데이터 보안
+
+### n8n 연동
+- **작업 스케줄링**: 정기적 작업 자동 생성
+- **알림 시스템**: Slack/Discord/Telegram 알림
+- **기기 모니터링**: 과열/오프라인 감지 및 대응
+- **리포트 자동화**: 일일/주간 통계 리포트
 
 ---
 
@@ -464,6 +478,120 @@ const AnimatedNumber = ({ value }: { value: number }) => {
 
 ---
 
+## 🔌 Supabase 클라이언트 설정
+
+```typescript
+// lib/supabase.ts
+import { createClient } from '@supabase/supabase-js'
+import type { Database } from './database.types'
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey)
+
+// 실시간 구독 헬퍼
+export const subscribeToTable = (
+  table: 'videos' | 'devices' | 'tasks' | 'results',
+  callback: (payload: any) => void
+) => {
+  return supabase
+    .channel(`${table}_changes`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table },
+      callback
+    )
+    .subscribe()
+}
+```
+
+### 실시간 구독 훅 예시
+
+```typescript
+// hooks/useRealtimeDevices.ts
+import { useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { subscribeToTable } from '../lib/supabase'
+
+export function useRealtimeDevices() {
+  const queryClient = useQueryClient()
+
+  useEffect(() => {
+    const subscription = subscribeToTable('devices', () => {
+      queryClient.invalidateQueries({ queryKey: ['devices'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    })
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [queryClient])
+}
+```
+
+---
+
+## 🤖 n8n 웹훅 연동
+
+```typescript
+// lib/n8n.ts
+const N8N_WEBHOOK_BASE = import.meta.env.VITE_N8N_WEBHOOK_URL
+
+export const n8nWebhooks = {
+  // 수동 작업 트리거
+  triggerTask: async (videoId: string, deviceId: string) => {
+    const response = await fetch(`${N8N_WEBHOOK_BASE}/trigger-task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video_id: videoId, device_id: deviceId })
+    })
+    return response.json()
+  },
+
+  // 긴급 알림 전송
+  sendAlert: async (type: 'error' | 'warning' | 'info', message: string) => {
+    await fetch(`${N8N_WEBHOOK_BASE}/alert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, message, timestamp: new Date().toISOString() })
+    })
+  },
+
+  // 일일 리포트 수동 요청
+  requestDailyReport: async () => {
+    const response = await fetch(`${N8N_WEBHOOK_BASE}/daily-report`, {
+      method: 'POST'
+    })
+    return response.json()
+  }
+}
+```
+
+### 대시보드 n8n 액션 버튼
+
+```tsx
+// components/N8nActions.tsx
+import { FileText, Bell, Zap } from 'lucide-react'
+
+export function N8nActions() {
+  return (
+    <div className="flex gap-2">
+      <button className="btn-secondary flex items-center gap-2">
+        <FileText size={16} />
+        리포트 생성
+      </button>
+      <button className="btn-secondary flex items-center gap-2">
+        <Bell size={16} />
+        테스트 알림
+      </button>
+    </div>
+  )
+}
+```
+
+---
+
 ## 📡 API 타입 정의
 
 ```typescript
@@ -576,6 +704,21 @@ export interface PatternResponse {
 
 ---
 
+## 🔐 환경 변수
+
+```env
+# frontend/.env.local
+
+# Supabase
+VITE_SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIs...
+
+# n8n Webhooks
+VITE_N8N_WEBHOOK_URL=https://your-n8n.com/webhook
+```
+
+---
+
 ## ⛔ 금지 사항
 
 1. **폰트**: Inter, Roboto, Arial 사용 금지 → Pretendard 사용
@@ -598,6 +741,18 @@ export interface PatternResponse {
 - [ ] Framer Motion 애니메이션
 - [ ] Zustand 스토어 설정
 
+### Supabase 연동
+- [ ] @supabase/supabase-js 설치
+- [ ] Supabase 클라이언트 설정
+- [ ] 실시간 구독 (devices, tasks)
+- [ ] API 함수를 Supabase 쿼리로 교체
+
+### n8n 연동
+- [ ] 웹훅 유틸리티 함수 생성
+- [ ] 대시보드에 n8n 액션 버튼 추가
+- [ ] 리포트 생성 버튼
+- [ ] 테스트 알림 버튼
+
 ### 선택 구현
 - [ ] 토스트 알림 시스템
 - [ ] 키보드 단축키
@@ -605,6 +760,18 @@ export interface PatternResponse {
 
 ---
 
+## 📦 설치해야 할 패키지
+
+```bash
+npm install @supabase/supabase-js @tanstack/react-query zustand framer-motion recharts lucide-react date-fns react-router-dom clsx
+```
+
+---
+
 이 프롬프트를 v0.dev에 전달하여 대시보드를 구현해주세요.
 한국어 UI를 사용합니다.
+
+**주요 연동 서비스:**
+- 🗄️ **Supabase**: 데이터베이스 + 실시간 구독
+- 🤖 **n8n**: 워크플로우 자동화 + 알림
 

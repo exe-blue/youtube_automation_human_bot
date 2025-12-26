@@ -1,533 +1,761 @@
-# 데이터베이스 구축 가이드
+# Supabase 데이터베이스 구축 가이드
 
 ## 📋 개요
 
-YouTube 자동화 시스템의 PostgreSQL 데이터베이스 구축 및 설정 가이드입니다.
+YouTube 자동화 시스템의 **Supabase** 데이터베이스 구축 및 설정 가이드입니다.
+
+### Supabase 선택 이유
+- ✅ 호스팅된 PostgreSQL (관리 부담 없음)
+- ✅ 실시간 구독 (Realtime) - 기기 상태 실시간 업데이트
+- ✅ Row Level Security (RLS) - 보안
+- ✅ 자동 REST API 생성 (PostgREST)
+- ✅ Edge Functions - 서버리스 함수
+- ✅ 스토리지 - 스크린샷 저장
+- ✅ 대시보드 UI - 데이터 관리 편리
 
 ---
 
-## 🐘 1. PostgreSQL 설치
+## 🚀 1. Supabase 프로젝트 생성
 
-### Option A: Docker 사용 (권장)
+### Step 1: 계정 생성 및 프로젝트 만들기
 
-```bash
-# 프로젝트 루트에서 실행
-cd D:\exe.blue\ai-fram
+1. [Supabase](https://supabase.com) 접속
+2. GitHub 또는 이메일로 가입
+3. **New Project** 클릭
+4. 프로젝트 설정:
+   - **Name**: `youtube-automation`
+   - **Database Password**: 강력한 비밀번호 설정 (저장 필수!)
+   - **Region**: `Northeast Asia (Seoul)` 또는 가까운 리전
+   - **Pricing Plan**: Free tier로 시작 가능
 
-# Docker Compose로 PostgreSQL + Redis 실행
-docker-compose up -d postgres redis
+5. 프로젝트 생성 완료까지 약 2분 대기
 
-# 상태 확인
-docker-compose ps
+### Step 2: 연결 정보 확인
+
+프로젝트 대시보드에서 **Settings > Database**로 이동:
+
+```
+Host: db.xxxxxxxxxxxxx.supabase.co
+Database name: postgres
+Port: 5432 (Transaction) / 6543 (Session)
+User: postgres
+Password: [설정한 비밀번호]
 ```
 
-### Option B: 로컬 설치 (Windows)
-
-1. [PostgreSQL 공식 사이트](https://www.postgresql.org/download/windows/)에서 다운로드
-2. 설치 시 비밀번호 설정 기억
-3. pgAdmin 4 함께 설치 권장
-
-```powershell
-# 환경변수 설정 확인
-$env:Path += ";C:\Program Files\PostgreSQL\15\bin"
-
-# PostgreSQL 버전 확인
-psql --version
+**Settings > API**에서:
+```
+Project URL: https://xxxxxxxxxxxxx.supabase.co
+anon (public) key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+service_role key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... (비공개!)
 ```
 
 ---
 
-## 🗄️ 2. 데이터베이스 생성
+## 🗄️ 2. 데이터베이스 스키마 설정
 
-### 데이터베이스 및 사용자 생성
+### Supabase SQL Editor에서 실행
+
+Supabase 대시보드 > **SQL Editor** > **New Query**
 
 ```sql
--- PostgreSQL에 접속 (postgres 사용자로)
-psql -U postgres
+-- =============================================
+-- YouTube 자동화 시스템 - Supabase 스키마
+-- =============================================
 
--- 데이터베이스 생성
-CREATE DATABASE youtube_automation;
+-- UUID 확장 (Supabase에서 기본 활성화됨)
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 전용 사용자 생성 (선택사항)
-CREATE USER ytauto WITH PASSWORD 'your_secure_password_here';
+-- =============================================
+-- 1. 영상 테이블
+-- =============================================
+CREATE TABLE IF NOT EXISTS videos (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    url TEXT,
+    title TEXT,
+    keyword VARCHAR(255),
+    duration INTEGER,
+    priority INTEGER DEFAULT 5 CHECK (priority >= 1 AND priority <= 10),
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'error')),
+    completed_count INTEGER DEFAULT 0,
+    error_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 
--- 권한 부여
-GRANT ALL PRIVILEGES ON DATABASE youtube_automation TO ytauto;
+-- 영상 RLS 정책
+ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
 
--- 접속 종료
-\q
+CREATE POLICY "videos_select" ON videos FOR SELECT USING (true);
+CREATE POLICY "videos_insert" ON videos FOR INSERT WITH CHECK (true);
+CREATE POLICY "videos_update" ON videos FOR UPDATE USING (true);
+CREATE POLICY "videos_delete" ON videos FOR DELETE USING (true);
+
+-- =============================================
+-- 2. 기기 테이블
+-- =============================================
+CREATE TABLE IF NOT EXISTS devices (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    serial_number VARCHAR(100) UNIQUE NOT NULL,
+    pc_id VARCHAR(50) NOT NULL,
+    model VARCHAR(100),
+    status VARCHAR(20) DEFAULT 'offline' CHECK (status IN ('idle', 'busy', 'offline', 'error', 'overheat')),
+    last_heartbeat TIMESTAMPTZ,
+    battery_temp FLOAT,
+    cpu_usage FLOAT,
+    memory_usage FLOAT,
+    battery_level INTEGER,
+    total_tasks INTEGER DEFAULT 0,
+    success_tasks INTEGER DEFAULT 0,
+    error_tasks INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 기기 RLS 정책
+ALTER TABLE devices ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "devices_select" ON devices FOR SELECT USING (true);
+CREATE POLICY "devices_insert" ON devices FOR INSERT WITH CHECK (true);
+CREATE POLICY "devices_update" ON devices FOR UPDATE USING (true);
+CREATE POLICY "devices_delete" ON devices FOR DELETE USING (true);
+
+-- =============================================
+-- 3. 작업 테이블
+-- =============================================
+CREATE TABLE IF NOT EXISTS tasks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    video_id UUID NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    device_id UUID REFERENCES devices(id) ON DELETE SET NULL,
+    status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued', 'assigned', 'running', 'completed', 'failed', 'cancelled')),
+    priority INTEGER DEFAULT 5,
+    pattern_config JSONB DEFAULT '{}',
+    retry_count INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 3,
+    error_message TEXT,
+    queued_at TIMESTAMPTZ DEFAULT NOW(),
+    assigned_at TIMESTAMPTZ,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ
+);
+
+-- 작업 RLS 정책
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "tasks_select" ON tasks FOR SELECT USING (true);
+CREATE POLICY "tasks_insert" ON tasks FOR INSERT WITH CHECK (true);
+CREATE POLICY "tasks_update" ON tasks FOR UPDATE USING (true);
+CREATE POLICY "tasks_delete" ON tasks FOR DELETE USING (true);
+
+-- =============================================
+-- 4. 결과 테이블
+-- =============================================
+CREATE TABLE IF NOT EXISTS results (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    device_id UUID NOT NULL REFERENCES devices(id),
+    video_id UUID NOT NULL REFERENCES videos(id),
+    watch_time INTEGER NOT NULL,
+    total_duration INTEGER NOT NULL,
+    watch_percent FLOAT GENERATED ALWAYS AS (
+        CASE WHEN total_duration > 0 THEN (watch_time::FLOAT / total_duration) * 100 ELSE 0 END
+    ) STORED,
+    liked BOOLEAN DEFAULT FALSE,
+    commented BOOLEAN DEFAULT FALSE,
+    comment_text TEXT,
+    search_type INTEGER CHECK (search_type IN (1, 2, 3, 4)),
+    search_rank INTEGER DEFAULT 0,
+    screenshot_url TEXT,
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 결과 RLS 정책
+ALTER TABLE results ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "results_select" ON results FOR SELECT USING (true);
+CREATE POLICY "results_insert" ON results FOR INSERT WITH CHECK (true);
+CREATE POLICY "results_update" ON results FOR UPDATE USING (true);
+CREATE POLICY "results_delete" ON results FOR DELETE USING (true);
+
+-- =============================================
+-- 5. 패턴 로그 테이블
+-- =============================================
+CREATE TABLE IF NOT EXISTS pattern_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    task_id UUID REFERENCES tasks(id) ON DELETE CASCADE,
+    pattern_type VARCHAR(50) NOT NULL,
+    pattern_data JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 패턴 로그 RLS 정책
+ALTER TABLE pattern_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "pattern_logs_select" ON pattern_logs FOR SELECT USING (true);
+CREATE POLICY "pattern_logs_insert" ON pattern_logs FOR INSERT WITH CHECK (true);
+
+-- =============================================
+-- 6. 인덱스 생성
+-- =============================================
+CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
+CREATE INDEX IF NOT EXISTS idx_videos_priority ON videos(priority DESC);
+CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
+CREATE INDEX IF NOT EXISTS idx_devices_pc_id ON devices(pc_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_video_id ON tasks(video_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_device_id ON tasks(device_id);
+CREATE INDEX IF NOT EXISTS idx_results_task_id ON results(task_id);
+CREATE INDEX IF NOT EXISTS idx_results_video_id ON results(video_id);
+CREATE INDEX IF NOT EXISTS idx_results_device_id ON results(device_id);
+CREATE INDEX IF NOT EXISTS idx_results_created_at ON results(created_at DESC);
+
+-- =============================================
+-- 7. 자동 업데이트 트리거
+-- =============================================
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER videos_updated_at
+    BEFORE UPDATE ON videos
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER devices_updated_at
+    BEFORE UPDATE ON devices
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- =============================================
+-- 8. 뷰 생성
+-- =============================================
+
+-- 일별 통계 뷰
+CREATE OR REPLACE VIEW daily_stats AS
+SELECT 
+    DATE(created_at) as date,
+    COUNT(*) as total_results,
+    COUNT(*) FILTER (WHERE liked = TRUE) as likes,
+    COUNT(*) FILTER (WHERE commented = TRUE) as comments,
+    SUM(watch_time) as total_watch_time,
+    ROUND(AVG(watch_percent)::numeric, 2) as avg_watch_percent
+FROM results
+GROUP BY DATE(created_at)
+ORDER BY date DESC;
+
+-- 영상별 통계 뷰
+CREATE OR REPLACE VIEW video_stats AS
+SELECT 
+    v.id as video_id,
+    v.title,
+    v.status,
+    COUNT(r.id) as result_count,
+    COUNT(r.id) FILTER (WHERE r.liked = TRUE) as like_count,
+    COUNT(r.id) FILTER (WHERE r.commented = TRUE) as comment_count,
+    ROUND(AVG(r.watch_percent)::numeric, 2) as avg_watch_percent,
+    SUM(r.watch_time) as total_watch_time
+FROM videos v
+LEFT JOIN results r ON v.id = r.video_id
+GROUP BY v.id, v.title, v.status;
+
+-- 대시보드 집계 뷰
+CREATE OR REPLACE VIEW dashboard_stats AS
+SELECT 
+    (SELECT COUNT(*) FROM videos) as total_videos,
+    (SELECT COUNT(*) FROM videos WHERE status = 'pending') as pending_videos,
+    (SELECT COUNT(*) FROM videos WHERE status = 'completed') as completed_videos,
+    (SELECT COUNT(*) FROM devices) as total_devices,
+    (SELECT COUNT(*) FROM devices WHERE status = 'idle') as idle_devices,
+    (SELECT COUNT(*) FROM devices WHERE status = 'busy') as busy_devices,
+    (SELECT COUNT(*) FROM devices WHERE status = 'offline') as offline_devices,
+    (SELECT COUNT(*) FROM devices WHERE status = 'error') as error_devices,
+    (SELECT COUNT(*) FROM tasks WHERE status = 'queued') as queued_tasks,
+    (SELECT COUNT(*) FROM tasks WHERE status = 'running') as running_tasks,
+    (SELECT COUNT(*) FROM tasks WHERE status = 'completed') as completed_tasks,
+    (SELECT COUNT(*) FROM results) as total_results,
+    (SELECT COALESCE(SUM(watch_time), 0) FROM results) as total_watch_time,
+    (SELECT ROUND(AVG(watch_percent)::numeric, 2) FROM results) as avg_watch_percent,
+    (SELECT ROUND((COUNT(*) FILTER (WHERE liked) * 100.0 / NULLIF(COUNT(*), 0))::numeric, 2) FROM results) as like_rate,
+    (SELECT ROUND((COUNT(*) FILTER (WHERE commented) * 100.0 / NULLIF(COUNT(*), 0))::numeric, 2) FROM results) as comment_rate;
+
+-- =============================================
+-- 9. Realtime 활성화
+-- =============================================
+-- Supabase 대시보드에서 각 테이블에 대해 Realtime 활성화 필요
+-- Database > Replication > 각 테이블 토글 ON
+
+ALTER PUBLICATION supabase_realtime ADD TABLE videos;
+ALTER PUBLICATION supabase_realtime ADD TABLE devices;
+ALTER PUBLICATION supabase_realtime ADD TABLE tasks;
+ALTER PUBLICATION supabase_realtime ADD TABLE results;
+
+-- =============================================
+-- 테이블 코멘트
+-- =============================================
+COMMENT ON TABLE videos IS '시청 대상 YouTube 영상 정보';
+COMMENT ON TABLE devices IS '연결된 Android 기기 정보';
+COMMENT ON TABLE tasks IS '작업 큐 및 상태 관리';
+COMMENT ON TABLE results IS '시청 결과 및 통계';
+COMMENT ON TABLE pattern_logs IS '적용된 휴먼 패턴 로그';
 ```
+
+### Run Query 클릭하여 실행
 
 ---
 
-## 📝 3. 스키마 초기화
+## 🔌 3. 프론트엔드 Supabase 연동
 
-### init.sql 실행
+### Supabase 클라이언트 설치
 
 ```bash
-# Windows PowerShell
-psql -U postgres -d youtube_automation -f "D:\exe.blue\ai-fram\shared\database\init.sql"
-
-# 또는 전용 사용자로
-psql -U ytauto -d youtube_automation -f "D:\exe.blue\ai-fram\shared\database\init.sql"
+cd D:\exe.blue\ai-fram\frontend
+npm install @supabase/supabase-js
 ```
 
-### 초기화 확인
+### 환경 변수 설정
 
-```sql
--- 데이터베이스 접속
-psql -U postgres -d youtube_automation
+```env
+# frontend/.env.local
+VITE_SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
 
--- 테이블 목록 확인
-\dt
+### Supabase 클라이언트 생성
 
--- 예상 결과:
---              List of relations
---  Schema |     Name      | Type  |  Owner
--- --------+---------------+-------+----------
---  public | devices       | table | postgres
---  public | pattern_logs  | table | postgres
---  public | results       | table | postgres
---  public | tasks         | table | postgres
---  public | videos        | table | postgres
+```typescript
+// frontend/src/lib/supabase.ts
+import { createClient } from '@supabase/supabase-js'
+import type { Database } from './database.types'
 
--- 인덱스 확인
-\di
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
--- 뷰 확인
-\dv
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey)
 
--- 예상 결과:
---              List of relations
---  Schema |     Name     | Type |  Owner
--- --------+--------------+------+----------
---  public | daily_stats  | view | postgres
---  public | video_stats  | view | postgres
+// 실시간 구독 헬퍼
+export const subscribeToTable = (
+  table: string,
+  callback: (payload: any) => void
+) => {
+  return supabase
+    .channel(`${table}_changes`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table },
+      callback
+    )
+    .subscribe()
+}
+```
+
+### 타입 생성 (선택사항)
+
+```bash
+# Supabase CLI 설치
+npm install -g supabase
+
+# 타입 생성
+supabase gen types typescript --project-id xxxxxxxxxxxxx > src/lib/database.types.ts
+```
+
+### API 함수 업데이트
+
+```typescript
+// frontend/src/lib/api.ts
+import { supabase } from './supabase'
+
+// =============================================
+// 영상 API
+// =============================================
+export const videoApi = {
+  list: async (params?: { status?: string; limit?: number }) => {
+    let query = supabase
+      .from('videos')
+      .select('*')
+      .order('priority', { ascending: false })
+      .order('created_at', { ascending: false })
+
+    if (params?.status) {
+      query = query.eq('status', params.status)
+    }
+    if (params?.limit) {
+      query = query.limit(params.limit)
+    }
+
+    const { data, error } = await query
+    if (error) throw error
+
+    // 통계 계산
+    const stats = {
+      total: data?.length || 0,
+      pending: data?.filter(v => v.status === 'pending').length || 0,
+      processing: data?.filter(v => v.status === 'processing').length || 0,
+      completed: data?.filter(v => v.status === 'completed').length || 0,
+      error: data?.filter(v => v.status === 'error').length || 0,
+      videos: data || []
+    }
+
+    return { data: stats }
+  },
+
+  create: async (video: {
+    url?: string
+    title?: string
+    keyword?: string
+    duration?: number
+    priority?: number
+  }) => {
+    const { data, error } = await supabase
+      .from('videos')
+      .insert(video)
+      .select()
+      .single()
+
+    if (error) throw error
+    return { data }
+  },
+
+  delete: async (id: string) => {
+    const { error } = await supabase
+      .from('videos')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
+    return { success: true }
+  }
+}
+
+// =============================================
+// 기기 API
+// =============================================
+export const deviceApi = {
+  list: async (params?: { status?: string; pc_id?: string }) => {
+    let query = supabase
+      .from('devices')
+      .select('*')
+      .order('last_heartbeat', { ascending: false })
+
+    if (params?.status) {
+      query = query.eq('status', params.status)
+    }
+    if (params?.pc_id) {
+      query = query.eq('pc_id', params.pc_id)
+    }
+
+    const { data, error } = await query
+    if (error) throw error
+
+    const stats = {
+      total: data?.length || 0,
+      idle: data?.filter(d => d.status === 'idle').length || 0,
+      busy: data?.filter(d => d.status === 'busy').length || 0,
+      offline: data?.filter(d => d.status === 'offline').length || 0,
+      error: data?.filter(d => d.status === 'error').length || 0,
+      devices: data || []
+    }
+
+    return { data: stats }
+  },
+
+  heartbeat: async (id: string, health: {
+    battery_temp?: number
+    cpu_usage?: number
+    memory_usage?: number
+    battery_level?: number
+    status?: string
+  }) => {
+    const { error } = await supabase
+      .from('devices')
+      .update({
+        ...health,
+        last_heartbeat: new Date().toISOString()
+      })
+      .eq('id', id)
+
+    if (error) throw error
+    return { success: true }
+  }
+}
+
+// =============================================
+// 작업 API
+// =============================================
+export const taskApi = {
+  list: async (params?: { status?: string; limit?: number }) => {
+    let query = supabase
+      .from('tasks')
+      .select('*')
+      .order('priority', { ascending: false })
+      .order('queued_at', { ascending: false })
+
+    if (params?.status) {
+      query = query.eq('status', params.status)
+    }
+    if (params?.limit) {
+      query = query.limit(params.limit)
+    }
+
+    const { data, error } = await query
+    if (error) throw error
+
+    const stats = {
+      total: data?.length || 0,
+      queued: data?.filter(t => t.status === 'queued').length || 0,
+      running: data?.filter(t => t.status === 'running').length || 0,
+      completed: data?.filter(t => t.status === 'completed').length || 0,
+      failed: data?.filter(t => t.status === 'failed').length || 0,
+      tasks: data || []
+    }
+
+    return { data: stats }
+  },
+
+  create: async (task: {
+    video_id: string
+    device_id?: string
+    priority?: number
+  }) => {
+    const { data, error } = await supabase
+      .from('tasks')
+      .insert(task)
+      .select()
+      .single()
+
+    if (error) throw error
+    return { data }
+  }
+}
+
+// =============================================
+// 통계 API
+// =============================================
+export const statsApi = {
+  get: async () => {
+    // 대시보드 집계
+    const { data: dashboard } = await supabase
+      .from('dashboard_stats')
+      .select('*')
+      .single()
+
+    // 일별 통계 (최근 7일)
+    const { data: daily } = await supabase
+      .from('daily_stats')
+      .select('*')
+      .limit(7)
+
+    return {
+      data: {
+        aggregated: {
+          total_tasks: dashboard?.completed_tasks || 0,
+          completed_tasks: dashboard?.completed_tasks || 0,
+          total_watch_time: dashboard?.total_watch_time || 0,
+          avg_watch_percent: dashboard?.avg_watch_percent || 0,
+          like_rate: dashboard?.like_rate || 0,
+          comment_rate: dashboard?.comment_rate || 0
+        },
+        daily: daily?.map(d => ({
+          date: d.date,
+          tasks_completed: d.total_results,
+          watch_time: d.total_watch_time,
+          likes: d.likes,
+          comments: d.comments
+        })) || []
+      }
+    }
+  }
+}
+
+// =============================================
+// 대시보드 API
+// =============================================
+export const dashboardApi = {
+  get: async () => {
+    const [videos, devices, stats] = await Promise.all([
+      videoApi.list(),
+      deviceApi.list(),
+      statsApi.get()
+    ])
+
+    return {
+      data: {
+        videos: {
+          total: videos.data.total,
+          pending: videos.data.pending,
+          completed: videos.data.completed
+        },
+        devices: {
+          total: devices.data.total,
+          idle: devices.data.idle,
+          busy: devices.data.busy,
+          offline: devices.data.offline,
+          error: devices.data.error
+        },
+        stats: stats.data
+      }
+    }
+  }
+}
+```
+
+### 실시간 구독 예시 (기기 상태)
+
+```typescript
+// frontend/src/hooks/useDeviceRealtime.ts
+import { useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { subscribeToTable } from '../lib/supabase'
+
+export function useDeviceRealtime() {
+  const queryClient = useQueryClient()
+
+  useEffect(() => {
+    const subscription = subscribeToTable('devices', (payload) => {
+      // 기기 데이터 변경 시 쿼리 무효화
+      queryClient.invalidateQueries({ queryKey: ['devices'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    })
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [queryClient])
+}
 ```
 
 ---
 
 ## 🔧 4. 환경 변수 설정
 
-### .env 파일 생성
-
-```bash
-# 프로젝트 루트에 .env 파일 생성
-cd D:\exe.blue\ai-fram
-copy .env.example .env
-```
-
-### .env 내용
+### 프론트엔드 (.env.local)
 
 ```env
-# ===========================================
-# 데이터베이스 설정
-# ===========================================
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=youtube_automation
-DB_USER=postgres
-DB_PASSWORD=your_secure_password_here
+# Supabase
+VITE_SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
-# 연결 URL (SQLAlchemy 형식)
-DATABASE_URL=postgresql://postgres:your_password@localhost:5432/youtube_automation
+# n8n (선택사항)
+VITE_N8N_WEBHOOK_URL=https://your-n8n-instance.com/webhook/xxxxx
+```
 
-# ===========================================
-# Redis 설정
-# ===========================================
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=
-REDIS_DB=0
+### 백엔드 서비스 (.env)
 
-# Redis URL
-REDIS_URL=redis://localhost:6379/0
+```env
+# Supabase
+SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
+SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... # service_role key
 
-# ===========================================
-# API 설정
-# ===========================================
-# 쉼표로 구분된 API 키 목록
-API_KEYS=dev-key-123,admin-key-456
+# PostgreSQL 직접 연결 (필요시)
+DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@db.xxxxxxxxxxxxx.supabase.co:5432/postgres
 
-# JWT 시크릿 (선택사항)
-JWT_SECRET=your_jwt_secret_key_here
-
-# ===========================================
-# 서비스 URL (Docker 내부/외부)
-# ===========================================
-# 로컬 개발용
-API_GATEWAY_URL=http://localhost:8000
-VIDEO_SERVICE_URL=http://localhost:8001
-DEVICE_SERVICE_URL=http://localhost:8002
-TASK_SERVICE_URL=http://localhost:8003
-PATTERN_SERVICE_URL=http://localhost:8004
-RESULT_SERVICE_URL=http://localhost:8005
-
-# Docker 내부용 (docker-compose에서 사용)
-# VIDEO_SERVICE_URL=http://video-service:8001
-# DEVICE_SERVICE_URL=http://device-service:8002
-# ...
-
-# ===========================================
-# 프론트엔드 설정
-# ===========================================
-VITE_API_URL=http://localhost:8000/api
-
-# ===========================================
-# 기타 설정
-# ===========================================
-# 로그 레벨: DEBUG, INFO, WARNING, ERROR
-LOG_LEVEL=INFO
-
-# 환경: development, production
-ENVIRONMENT=development
-
-# 시간대
-TZ=Asia/Seoul
+# n8n Webhook
+N8N_WEBHOOK_BASE_URL=https://your-n8n-instance.com/webhook
 ```
 
 ---
 
 ## 🧪 5. 테스트 데이터 삽입
 
-### 테스트 데이터 SQL
+Supabase SQL Editor에서 실행:
 
 ```sql
--- youtube_automation 데이터베이스에 접속
-psql -U postgres -d youtube_automation
+-- 테스트 영상
+INSERT INTO videos (url, title, keyword, duration, priority, status, completed_count) VALUES
+('https://youtube.com/watch?v=test1', '테스트 영상 1', '테스트', 300, 5, 'pending', 0),
+('https://youtube.com/watch?v=test2', '테스트 영상 2', '자동화', 600, 8, 'processing', 0),
+('https://youtube.com/watch?v=test3', '완료된 영상', 'YouTube', 180, 7, 'completed', 150);
 
--- =============================================
--- 테스트 영상 데이터
--- =============================================
-INSERT INTO videos (url, title, keyword, duration, priority, status) VALUES
-('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'Never Gonna Give You Up', '음악', 213, 5, 'pending'),
-('https://www.youtube.com/watch?v=9bZkp7q19f0', 'Gangnam Style', 'K-POP', 253, 8, 'pending'),
-('https://www.youtube.com/watch?v=kJQP7kiw5Fk', 'Despacito', '음악', 282, 7, 'processing'),
-('https://www.youtube.com/watch?v=JGwWNGJdvx8', 'Shape of You', '팝송', 263, 6, 'completed'),
-('https://www.youtube.com/watch?v=RgKAFK5djSk', 'See You Again', '영화OST', 237, 4, 'completed');
-
--- 영상 완료 카운트 업데이트
-UPDATE videos SET completed_count = 150 WHERE title = 'Shape of You';
-UPDATE videos SET completed_count = 89 WHERE title = 'See You Again';
-
--- =============================================
--- 테스트 기기 데이터
--- =============================================
-INSERT INTO devices (serial_number, pc_id, model, status, battery_level, battery_temp, cpu_usage, memory_usage, total_tasks, success_tasks, error_tasks) VALUES
-('RF8M33XYZAB', 'PC-001', 'Samsung Galaxy S21', 'idle', 85, 32.5, 15.2, 45.0, 1250, 1180, 70),
-('9A231FFAZ00123', 'PC-001', 'Google Pixel 6', 'busy', 72, 38.2, 65.8, 72.3, 980, 920, 60),
-('LGE-LM-G900N', 'PC-001', 'LG Velvet', 'idle', 91, 29.0, 8.5, 38.0, 750, 720, 30),
-('XIAOMI12PRO001', 'PC-002', 'Xiaomi 12 Pro', 'offline', 45, 25.0, 0.0, 0.0, 500, 480, 20),
-('OP9PRO-ABC123', 'PC-002', 'OnePlus 9 Pro', 'busy', 68, 41.5, 78.2, 80.1, 890, 845, 45),
-('SAMSUNG-A52-001', 'PC-002', 'Samsung Galaxy A52', 'error', 15, 55.2, 95.0, 92.0, 320, 280, 40),
-('PIXEL5A-XYZ789', 'PC-003', 'Google Pixel 5a', 'idle', 95, 28.0, 5.0, 25.0, 600, 590, 10),
-('NOTE20-ULTRA-01', 'PC-003', 'Samsung Galaxy Note 20 Ultra', 'overheat', 55, 62.0, 85.0, 88.0, 1100, 1020, 80);
+-- 테스트 기기
+INSERT INTO devices (serial_number, pc_id, model, status, battery_level, battery_temp, cpu_usage, total_tasks, success_tasks) VALUES
+('RF8M33XYZAB', 'PC-001', 'Galaxy S21', 'idle', 85, 32.5, 15.2, 1250, 1180),
+('9A231FFAZ00123', 'PC-001', 'Pixel 6', 'busy', 72, 38.2, 65.8, 980, 920),
+('LGE-LM-G900N', 'PC-002', 'LG Velvet', 'offline', 45, 25.0, 0.0, 500, 480);
 
 -- 하트비트 업데이트
-UPDATE devices SET last_heartbeat = CURRENT_TIMESTAMP WHERE status != 'offline';
+UPDATE devices SET last_heartbeat = NOW() WHERE status != 'offline';
 
--- =============================================
--- 테스트 작업 데이터
--- =============================================
--- video_id와 device_id를 가져와서 작업 생성
+-- 테스트 작업 및 결과 (video_id, device_id 참조)
 DO $$
 DECLARE
     v_id UUID;
     d_id UUID;
-BEGIN
-    -- 첫 번째 영상 + 첫 번째 기기로 작업 생성
-    SELECT id INTO v_id FROM videos WHERE title = 'Never Gonna Give You Up';
-    SELECT id INTO d_id FROM devices WHERE model = 'Samsung Galaxy S21';
-    
-    INSERT INTO tasks (video_id, device_id, status, priority) VALUES
-    (v_id, d_id, 'completed', 5),
-    (v_id, NULL, 'queued', 5);
-    
-    -- 두 번째 영상 + 두 번째 기기
-    SELECT id INTO v_id FROM videos WHERE title = 'Gangnam Style';
-    SELECT id INTO d_id FROM devices WHERE model = 'Google Pixel 6';
-    
-    INSERT INTO tasks (video_id, device_id, status, priority, started_at) VALUES
-    (v_id, d_id, 'running', 8, CURRENT_TIMESTAMP);
-    
-    -- 더 많은 대기 작업
-    SELECT id INTO v_id FROM videos WHERE title = 'Despacito';
-    INSERT INTO tasks (video_id, status, priority) VALUES
-    (v_id, 'queued', 7),
-    (v_id, 'queued', 7),
-    (v_id, 'queued', 7);
-    
-END $$;
-
--- =============================================
--- 테스트 결과 데이터
--- =============================================
-DO $$
-DECLARE
     t_id UUID;
-    d_id UUID;
-    v_id UUID;
 BEGIN
-    -- 완료된 작업의 결과 생성
-    SELECT t.id, t.device_id, t.video_id INTO t_id, d_id, v_id 
-    FROM tasks t WHERE t.status = 'completed' LIMIT 1;
+    SELECT id INTO v_id FROM videos WHERE title = '테스트 영상 1' LIMIT 1;
+    SELECT id INTO d_id FROM devices WHERE model = 'Galaxy S21' LIMIT 1;
     
-    IF t_id IS NOT NULL THEN
-        INSERT INTO results (task_id, device_id, video_id, watch_time, total_duration, liked, commented, comment_text, search_type, search_rank)
-        VALUES 
-        (t_id, d_id, v_id, 180, 213, true, false, NULL, 1, 3),
-        (t_id, d_id, v_id, 150, 213, true, true, '좋은 영상이네요!', 2, 1),
-        (t_id, d_id, v_id, 90, 213, false, false, NULL, 1, 5);
-    END IF;
+    INSERT INTO tasks (video_id, device_id, status, priority)
+    VALUES (v_id, d_id, 'completed', 5)
+    RETURNING id INTO t_id;
+    
+    INSERT INTO results (task_id, device_id, video_id, watch_time, total_duration, liked, commented, search_type, search_rank)
+    VALUES (t_id, d_id, v_id, 180, 300, true, false, 1, 3);
 END $$;
-
--- =============================================
--- 데이터 확인
--- =============================================
-SELECT 'videos' as table_name, COUNT(*) as count FROM videos
-UNION ALL
-SELECT 'devices', COUNT(*) FROM devices
-UNION ALL
-SELECT 'tasks', COUNT(*) FROM tasks
-UNION ALL
-SELECT 'results', COUNT(*) FROM results;
-
--- 일별 통계 뷰 확인
-SELECT * FROM daily_stats;
-
--- 영상별 통계 뷰 확인
-SELECT * FROM video_stats;
 ```
 
-### 테스트 데이터 실행
+---
+
+## 📊 6. Supabase 대시보드 활용
+
+### Table Editor
+- 데이터 직접 조회/수정
+- 필터링, 정렬
+- CSV 내보내기
+
+### SQL Editor
+- 커스텀 쿼리 실행
+- 마이그레이션 스크립트 관리
+
+### Realtime
+- `Database > Replication`에서 테이블별 실시간 활성화
+- videos, devices, tasks, results 모두 활성화 권장
+
+### Storage
+- 스크린샷 저장용 버킷 생성
+- `screenshots` 버킷 생성 후 public 접근 설정
+
+### Edge Functions
+- 휴먼 패턴 생성 API
+- n8n 웹훅 처리
+
+---
+
+## ✅ Supabase 설정 체크리스트
+
+- [ ] Supabase 프로젝트 생성
+- [ ] 서울 리전 선택
+- [ ] 데이터베이스 비밀번호 저장
+- [ ] SQL 스키마 실행 완료
+- [ ] 5개 테이블 생성 확인
+- [ ] RLS 정책 활성화
+- [ ] Realtime 활성화 (4개 테이블)
+- [ ] 환경 변수 설정 (.env.local)
+- [ ] Supabase 클라이언트 설치
+- [ ] 테스트 데이터 삽입
+- [ ] 실시간 구독 테스트
+
+---
+
+## 🔗 유용한 Supabase CLI 명령어
 
 ```bash
-# 파일로 저장 후 실행
-psql -U postgres -d youtube_automation -f test_data.sql
+# 로그인
+supabase login
 
-# 또는 직접 복사하여 psql에서 실행
+# 프로젝트 연결
+supabase link --project-ref xxxxxxxxxxxxx
+
+# 마이그레이션 생성
+supabase migration new add_new_column
+
+# 타입 생성
+supabase gen types typescript --local > src/lib/database.types.ts
+
+# 로컬 개발 서버
+supabase start
+
+# 상태 확인
+supabase status
 ```
-
----
-
-## 🔍 6. 데이터베이스 연결 테스트
-
-### Python 연결 테스트
-
-```python
-# test_db_connection.py
-import asyncio
-import asyncpg
-
-async def test_connection():
-    conn = await asyncpg.connect(
-        host='localhost',
-        port=5432,
-        user='postgres',
-        password='your_password',
-        database='youtube_automation'
-    )
-    
-    # 버전 확인
-    version = await conn.fetchval('SELECT version()')
-    print(f"PostgreSQL 버전: {version}")
-    
-    # 테이블 카운트
-    tables = await conn.fetch("""
-        SELECT table_name 
-        FROM information_schema.tables 
-        WHERE table_schema = 'public'
-    """)
-    print(f"테이블 수: {len(tables)}")
-    
-    for table in tables:
-        count = await conn.fetchval(f"SELECT COUNT(*) FROM {table['table_name']}")
-        print(f"  - {table['table_name']}: {count}개")
-    
-    await conn.close()
-    print("✅ 데이터베이스 연결 성공!")
-
-asyncio.run(test_connection())
-```
-
-### 실행
-
-```bash
-cd D:\exe.blue\ai-fram
-pip install asyncpg
-python test_db_connection.py
-```
-
----
-
-## 📊 7. 유용한 쿼리
-
-### 시스템 현황 조회
-
-```sql
--- 전체 현황 요약
-SELECT 
-    (SELECT COUNT(*) FROM videos) as total_videos,
-    (SELECT COUNT(*) FROM videos WHERE status = 'pending') as pending_videos,
-    (SELECT COUNT(*) FROM devices) as total_devices,
-    (SELECT COUNT(*) FROM devices WHERE status = 'idle') as idle_devices,
-    (SELECT COUNT(*) FROM tasks WHERE status = 'queued') as queued_tasks,
-    (SELECT COUNT(*) FROM results) as total_results;
-
--- 기기별 성공률
-SELECT 
-    d.model,
-    d.serial_number,
-    d.total_tasks,
-    d.success_tasks,
-    ROUND((d.success_tasks::numeric / NULLIF(d.total_tasks, 0)) * 100, 2) as success_rate
-FROM devices d
-ORDER BY success_rate DESC;
-
--- 최근 7일 일별 통계
-SELECT * FROM daily_stats 
-WHERE date >= CURRENT_DATE - INTERVAL '7 days'
-ORDER BY date DESC;
-
--- 영상별 인터랙션 통계
-SELECT 
-    v.title,
-    COUNT(r.id) as view_count,
-    SUM(CASE WHEN r.liked THEN 1 ELSE 0 END) as likes,
-    SUM(CASE WHEN r.commented THEN 1 ELSE 0 END) as comments,
-    ROUND(AVG(r.watch_percent), 2) as avg_watch_percent
-FROM videos v
-LEFT JOIN results r ON v.id = r.video_id
-GROUP BY v.id, v.title
-ORDER BY view_count DESC;
-```
-
-### 성능 모니터링
-
-```sql
--- 느린 쿼리 확인 (pg_stat_statements 확장 필요)
-CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
-
-SELECT 
-    query,
-    calls,
-    total_exec_time,
-    mean_exec_time,
-    rows
-FROM pg_stat_statements
-ORDER BY total_exec_time DESC
-LIMIT 10;
-
--- 테이블 크기 확인
-SELECT 
-    tablename,
-    pg_size_pretty(pg_total_relation_size(schemaname || '.' || tablename)) as size
-FROM pg_tables
-WHERE schemaname = 'public'
-ORDER BY pg_total_relation_size(schemaname || '.' || tablename) DESC;
-
--- 인덱스 사용률
-SELECT 
-    schemaname,
-    tablename,
-    indexname,
-    idx_scan,
-    idx_tup_read,
-    idx_tup_fetch
-FROM pg_stat_user_indexes
-ORDER BY idx_scan DESC;
-```
-
----
-
-## 🔄 8. 백업 및 복원
-
-### 백업
-
-```bash
-# 전체 백업
-pg_dump -U postgres -d youtube_automation -F c -f backup_$(date +%Y%m%d).dump
-
-# 스키마만 백업
-pg_dump -U postgres -d youtube_automation --schema-only -f schema_backup.sql
-
-# 데이터만 백업
-pg_dump -U postgres -d youtube_automation --data-only -f data_backup.sql
-```
-
-### 복원
-
-```bash
-# 전체 복원
-pg_restore -U postgres -d youtube_automation -c backup_20241226.dump
-
-# SQL 파일 복원
-psql -U postgres -d youtube_automation -f schema_backup.sql
-```
-
----
-
-## ⚠️ 트러블슈팅
-
-### 자주 발생하는 문제
-
-#### 1. 연결 거부
-```
-psql: error: connection refused
-```
-**해결**: PostgreSQL 서비스 실행 확인
-```powershell
-# Windows
-Get-Service -Name postgresql*
-Start-Service -Name postgresql-x64-15
-```
-
-#### 2. 인증 실패
-```
-psql: error: FATAL: password authentication failed
-```
-**해결**: `pg_hba.conf` 파일에서 인증 방식 확인
-
-#### 3. 데이터베이스 없음
-```
-psql: error: FATAL: database "youtube_automation" does not exist
-```
-**해결**: 데이터베이스 생성 필요
-```sql
-CREATE DATABASE youtube_automation;
-```
-
-#### 4. UUID 확장 오류
-```
-ERROR: function uuid_generate_v4() does not exist
-```
-**해결**: 확장 설치
-```sql
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-```
-
----
-
-## ✅ 체크리스트
-
-- [ ] PostgreSQL 15+ 설치 완료
-- [ ] youtube_automation 데이터베이스 생성
-- [ ] uuid-ossp 확장 활성화
-- [ ] init.sql 실행 완료
-- [ ] 5개 테이블 생성 확인 (videos, devices, tasks, results, pattern_logs)
-- [ ] 인덱스 생성 확인 (9개)
-- [ ] 트리거 작동 확인 (updated_at 자동 갱신)
-- [ ] 뷰 생성 확인 (daily_stats, video_stats)
-- [ ] .env 파일 설정 완료
-- [ ] Python 연결 테스트 성공
-- [ ] 테스트 데이터 삽입 (선택사항)
-- [ ] Redis 연결 테스트 (선택사항)
-
----
-
-## 📚 참고 자료
-
-- [PostgreSQL 공식 문서](https://www.postgresql.org/docs/)
-- [asyncpg 문서](https://magicstack.github.io/asyncpg/)
-- [SQLAlchemy 2.0 문서](https://docs.sqlalchemy.org/)
-
