@@ -1,0 +1,146 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 데이터베이스
+  postgres:
+    image: postgres:15
+    container_name: yt-automation-db
+    environment:
+      POSTGRES_DB: youtube_automation
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-securepassword123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./shared/database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d youtube_automation"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 메시지 큐
+  redis:
+    image: redis:7-alpine
+    container_name: yt-automation-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API Gateway
+  api-gateway:
+    build: ./services/api-gateway
+    container_name: yt-automation-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - VIDEO_SERVICE_URL=http://video-service:8001
+      - DEVICE_SERVICE_URL=http://device-service:8002
+      - TASK_SERVICE_URL=http://task-service:8003
+      - PATTERN_SERVICE_URL=http://pattern-service:8004
+      - RESULT_SERVICE_URL=http://result-service:8005
+      - API_KEYS=${API_KEYS:-test-key-123,admin-key-456}
+    depends_on:
+      - postgres
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Video Service
+  video-service:
+    build: ./services/video-service
+    container_name: yt-automation-video
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://admin:${DB_PASSWORD:-securepassword123}@postgres:5432/youtube_automation
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Device Service
+  device-service:
+    build: ./services/device-service
+    container_name: yt-automation-device
+    ports:
+      - "8002:8002"
+    environment:
+      - DATABASE_URL=postgresql://admin:${DB_PASSWORD:-securepassword123}@postgres:5432/youtube_automation
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Task Service
+  task-service:
+    build: ./services/task-service
+    container_name: yt-automation-task
+    ports:
+      - "8003:8003"
+    environment:
+      - DATABASE_URL=postgresql://admin:${DB_PASSWORD:-securepassword123}@postgres:5432/youtube_automation
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Human Pattern Service
+  pattern-service:
+    build: ./services/human-pattern-service
+    container_name: yt-automation-pattern
+    ports:
+      - "8004:8004"
+    environment:
+      - REDIS_URL=redis://redis:6379
+
+  # Result Service
+  result-service:
+    build: ./services/result-service
+    container_name: yt-automation-result
+    ports:
+      - "8005:8005"
+    environment:
+      - DATABASE_URL=postgresql://admin:${DB_PASSWORD:-securepassword123}@postgres:5432/youtube_automation
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Frontend Dashboard (개발용)
+  # frontend:
+  #   build: ./frontend
+  #   container_name: yt-automation-frontend
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - VITE_API_URL=http://localhost:8000
+  #   depends_on:
+  #     - api-gateway
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: yt-automation-network
+
