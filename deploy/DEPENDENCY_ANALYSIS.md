@@ -596,4 +596,4 @@ curl http://localhost:8080/api/docs
 - Phase 1 (Critical): 30분
 - Phase 2 (High): 2시간
 - Phase 3 (Medium): 3시간
-- Phase 4 (Low): 1시간
+- Phase 4 (Low): 1시간
